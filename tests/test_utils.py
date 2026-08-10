@@ -149,3 +149,73 @@ def test_imap_bounded_raises():
         list(_utils.imap_bounded(work, range(200), 4))
     with pytest.raises(ValueError):
         list(_utils.imap_bounded(work, range(200), 1))
+
+
+SHA_A = "a" * 40
+SHA_B = "b" * 40
+
+
+def _blk(sha, orig, final, n, author=None, ctime="100", extra=()):
+    """One `git blame --incremental` chunk block. Commit identity fields are
+    emitted only the first time a commit appears, so `author=None` builds the
+    bare repeat form: header, optional extras, `filename`."""
+    out = [f"{sha} {orig} {final} {n}"]
+    if author:
+        out += [
+            f"author {author}", f"author-mail <{author}@x>", "author-time 1", "author-tz +0000", f"committer {author}",
+            f"committer-mail <{author}@x>", f"committer-time {ctime}", "committer-tz +0000", "summary s"]
+    out += list(extra)
+    out.append("filename f.py")
+    return "\n".join(out)
+
+
+def test_parse_blame_incremental_basic():
+    """Metadata is carried across chunks that omit it"""
+    out = "\n".join([_blk(SHA_A, 1, 1, 2, "alice"), _blk(SHA_B, 5, 5, 1, "bob"), _blk(SHA_A, 9, 9, 3)]) + "\n"
+    assert list(_utils.parse_blame_incremental(out)) == [(2, "alice", "alice@x", "100"), (1, "bob", "bob@x", "100"),
+                                                         (3, "alice", "alice@x", "100")]
+
+
+def test_parse_blame_incremental_coalesces_adjacent():
+    """Adjacent same-commit chunks re-join into one porcelain-style group.
+
+    `--incremental` splits these; `--line-porcelain` reports one group, and
+    the chunk count is observable as `ctimes` entries.
+    """
+    out = "\n".join([_blk(SHA_A, 27, 41, 1, "alice"), _blk(SHA_A, 28, 42, 1)]) + "\n"
+    assert list(_utils.parse_blame_incremental(out)) == [(2, "alice", "alice@x", "100")]
+
+
+def test_parse_blame_incremental_no_coalesce_when_gapped():
+    """A gap in EITHER the final or the original file keeps chunks separate"""
+    gap_final = "\n".join([_blk(SHA_A, 27, 41, 1, "alice"), _blk(SHA_A, 28, 43, 1)]) + "\n"
+    assert len(list(_utils.parse_blame_incremental(gap_final))) == 2
+    gap_orig = "\n".join([_blk(SHA_A, 27, 41, 1, "alice"), _blk(SHA_A, 30, 42, 1)]) + "\n"
+    assert len(list(_utils.parse_blame_incremental(gap_orig))) == 2
+
+
+def test_parse_blame_incremental_emission_order():
+    """Chunks are grouped by commit in the stream, so ordering is by final line"""
+    out = "\n".join([_blk(SHA_A, 10, 10, 1, "alice"), _blk(SHA_A, 11, 11, 1), _blk(SHA_B, 1, 1, 1, "bob")]) + "\n"
+    assert list(_utils.parse_blame_incremental(out)) == [(1, "bob", "bob@x", "100"), (2, "alice", "alice@x", "100")]
+
+
+def test_parse_blame_incremental_boundary():
+    """`strip_boundary` drops boundary commits, and only when asked"""
+    out = "\n".join([_blk(SHA_A, 1, 1, 5, "alice", extra=["boundary"]), _blk(SHA_B, 6, 6, 2, "bob")]) + "\n"
+    assert len(list(_utils.parse_blame_incremental(out))) == 2
+    assert list(_utils.parse_blame_incremental(out, strip_boundary=True)) == [(2, "bob", "bob@x", "100")]
+    # a repeat chunk of a boundary commit carries no `boundary` line of its
+    # own, so the flag has to be remembered with the rest of the metadata
+    out2 = out + _blk(SHA_A, 20, 20, 3) + "\n"
+    assert list(_utils.parse_blame_incremental(out2, strip_boundary=True)) == [(2, "bob", "bob@x", "100")]
+
+
+def test_parse_blame_incremental_ignores_noise():
+    """git-fame folds stderr into stdout, so junk lines must not derail parsing"""
+    out = ("fatal: whatever\nwarning: something\n" + _blk(SHA_A, 1, 1, 4, "alice") + "\nnot a header at all\n")
+    assert list(_utils.parse_blame_incremental(out)) == [(4, "alice", "alice@x", "100")]
+
+
+def test_parse_blame_incremental_empty():
+    assert list(_utils.parse_blame_incremental("")) == []

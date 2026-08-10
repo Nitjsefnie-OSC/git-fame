@@ -1,4 +1,5 @@
 import logging
+import re
 import subprocess
 import sys
 from functools import partial
@@ -141,6 +142,92 @@ def merge_stats(left, right):
         else:
             raise TypeError(val)
     return left
+
+
+RE_INCR_CHUNK = re.compile(r'^([0-9a-f]{40,64}) (\d+) (\d+) (\d+)$')
+
+
+def parse_blame_incremental(blame_out, strip_boundary=False):
+    """Yield `(loc, author, email, committer_time)` per chunk of
+    `git blame --incremental` output.
+
+    Incremental is the cheapest blame format that still carries everything
+    needed here: it emits one chunk header (`<sha> <orig> <final> <nlines>`)
+    per contiguous run of lines, the commit's identity fields only the FIRST
+    time that commit appears, and -- unlike `--porcelain` and
+    `--line-porcelain` -- none of the file's actual content. That last point
+    is the whole reason to use it: the content is what makes the other
+    formats large, and it was never parsed.
+
+    So the commit metadata has to be remembered across chunks rather than
+    re-read from each one, which is the only real difference from parsing
+    `--line-porcelain`. Every chunk block ends with a `filename` line whether
+    or not it carried a commit header, so that -- not the next header -- is
+    what marks a chunk complete.
+
+    `strip_boundary` drops chunks attributed to a boundary commit, matching
+    what the `--since`/`--until` handling does for the porcelain formats:
+    without it, whoever happens to own the commit nearest the cutoff is
+    credited with every line older than the window.
+
+    One chunk per porcelain group, not per incremental chunk. `--incremental`
+    emits chunks as blame discovers them and skips the coalescing pass the
+    porcelain writer does, so a run of lines the porcelain formats report as
+    one group can arrive as several adjacent chunks of the same commit. The
+    line counts agree either way, but the CHUNK count does not -- and it is
+    observable, as one `ctimes` entry per chunk. So chunks are re-joined here
+    on contiguity in both the original and the final file, which reproduces
+    the porcelain grouping exactly.
+    """
+    commits = {}
+    chunks = []
+    sha = None
+    orig = final = nlines = 0
+    name = email = ctime = None
+    boundary = False
+    for line in blame_out.split('\n'):
+        m = RE_INCR_CHUNK.match(line)
+        if m:
+            sha = m.group(1)
+            orig, final, nlines = int(m.group(2)), int(m.group(3)), int(m.group(4))
+            cached = commits.get(sha)
+            if cached is None:
+                name = email = ctime = None
+                boundary = False
+            else:
+                name, email, ctime, boundary = cached
+            continue
+        if sha is None:
+            continue # header noise, or stderr folded into stdout
+        if line.startswith('author '):
+            name = line[7:]
+        elif line.startswith('author-mail <') and line.endswith('>'):
+            email = line[13:-1]
+        elif line.startswith('committer-time '):
+            ctime = line[15:]
+        elif line == 'boundary':
+            boundary = True
+        elif line.startswith('filename '):
+            if ctime is not None:
+                commits[sha] = (name, email, ctime, boundary)
+                if not (strip_boundary and boundary):
+                    chunks.append((final, orig, nlines, sha))
+            sha = None
+
+    chunks.sort()
+    prev_final = prev_orig = prev_n = 0
+    prev_sha = None
+    for final, orig, nlines, sha in chunks:
+        if (sha == prev_sha and final == prev_final + prev_n and orig == prev_orig + prev_n):
+            prev_n += nlines # same group, split only by the emission order
+            continue
+        if prev_sha is not None:
+            name, email, ctime, _ = commits[prev_sha]
+            yield prev_n, name, email, ctime
+        prev_final, prev_orig, prev_n, prev_sha = final, orig, nlines, sha
+    if prev_sha is not None:
+        name, email, ctime, _ = commits[prev_sha]
+        yield prev_n, name, email, ctime
 
 
 def imap_bounded(func, items, jobs):
