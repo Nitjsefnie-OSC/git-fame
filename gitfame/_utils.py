@@ -1,5 +1,4 @@
 import logging
-import os
 import re
 import subprocess
 import sys
@@ -35,12 +34,12 @@ class TqdmStream:
         tqdm_std.write(msg, end='')
 
 
-def check_output(*a, fsdecode=False, **k):
-    """`fsdecode` keeps bytes that are not UTF-8, so a listed path passed back as an argument names the same file"""
+def check_output(*a, errors='replace', **k):
+    """`errors='surrogateescape'` keeps bytes that are not UTF-8, so a listed path passed back as an argument
+    names the same file (in a UTF-8 locale, POSIX encodes a `str` argument back the same way)"""
     log.debug(' '.join(a[0][3:]))
     k.setdefault('stdout', subprocess.PIPE)
-    out = subprocess.Popen(*a, **k).communicate()[0] # nosec B603
-    return os.fsdecode(out) if fsdecode else out.decode('utf-8', errors='replace')
+    return subprocess.Popen(*a, **k).communicate()[0].decode('utf-8', errors=errors) # nosec B603
 
 
 def blank_col(rows, i, blanks):
