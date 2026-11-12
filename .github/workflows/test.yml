@@ -49,6 +49,8 @@ jobs:
       env:
         CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
   deploy:
+    # publishing is upstream's: this fork holds none of its PyPI, snap or Docker credentials
+    if: github.repository == 'casperdcl/git-fame'
     needs: test
     runs-on: ubuntu-latest
     environment: pypi
