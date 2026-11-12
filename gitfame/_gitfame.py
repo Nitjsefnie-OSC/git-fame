@@ -244,9 +244,13 @@ def _get_auth_stats(gitdir, branch="HEAD", since=None, include_files=None, exclu
     show = show or SHOW_NAME
     git_cmd = ["git", "-C", gitdir]
     log.debug("base command:%s", git_cmd)
-    file_list = check_output(git_cmd + ["ls-files", "--with-tree", branch]).strip().split('\n')
-    text_file_list = check_output(git_cmd + ["grep", "-I", "--name-only", ".", branch]).strip()
-    text_file_list = set(re.sub(f"^{re.escape(branch)}:", "", text_file_list, flags=re.M).split('\n'))
+    # NUL-separated: a newline split plus `.strip()` trims spaces from the first and last names
+    # and keeps the C-quoting Git applies to names holding a quote, a backslash or a control character
+    file_list = [f for f in check_output(git_cmd + ["ls-files", "-z", "--with-tree", branch]).split('\0') if f]
+    tree_prefix = f"{branch}:"
+    text_file_list = {
+        f[len(tree_prefix):] if f.startswith(tree_prefix) else f
+        for f in check_output(git_cmd + ["grep", "-I", "--name-only", "-z", ".", branch]).split('\0') if f}
     if not hasattr(include_files, 'search'):
         file_list = [i for i in file_list if (not include_files or (i in include_files)) if i not in exclude_files]
     else:
@@ -305,7 +309,8 @@ def _get_auth_stats(gitdir, branch="HEAD", since=None, include_files=None, exclu
             """Blame one file. Returns `(fname, output_or_exception)` so that
             failures stay in input order and are reported by the caller."""
             try:
-                return fname, check_output(base_cmd + [branch, fname], stderr=subprocess.STDOUT)
+                # `--`: a name starting with `-` is a path, not an option
+                return fname, check_output(base_cmd + [branch, '--', fname], stderr=subprocess.STDOUT)
             except Exception as err:
                 return fname, err
 
