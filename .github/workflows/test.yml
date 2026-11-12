@@ -8,10 +8,11 @@ jobs:
     if: github.event_name != 'pull_request' || !contains('OWNER,MEMBER,COLLABORATOR', github.event.pull_request.author_association)
     strategy:
       matrix:
-        python: [3.8, 3.14]
+        python: [3.14]
         os: [ubuntu]
-        include: [{os: macos, python: 3.14}, {os: windows, python: 3.14}]
-    runs-on: ${{ matrix.os }}-latest
+        # ubuntu-latest (26.04) has no Python 3.8 build; actions/python-versions still ships 3.8.18 for 24.04
+        include: [{os: ubuntu, python: 3.8, runner: ubuntu-24.04}, {os: macos, python: 3.14}, {os: windows, python: 3.14}]
+    runs-on: ${{ matrix.runner || format('{0}-latest', matrix.os) }}
     timeout-minutes: 5
     defaults: {run: {shell: bash}}
     steps:
