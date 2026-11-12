@@ -284,6 +284,31 @@ def test_multiple_gitdirs_loc(capsys):
     assert "Total files: 2" in out
 
 
+def test_awkward_names_loc(capsys):
+    """names `ls-files` lists first or last, Git C-quotes, or `blame` reads as an option are counted"""
+    import os
+    import subprocess
+    names = ["middle-safe.txt", "-dash.txt"]
+    if os.name == "posix": # Windows refuses these names
+        names += [" leading.txt", "trailing.txt ", 'a"b.txt', "a\\b.txt", "tab\tx.txt"]
+    repo = mkdtemp()
+    try:
+        subprocess.check_call(["git", "init", "-q", repo])
+        for name in names:
+            with open(path.join(repo, name), 'w') as fd:
+                fd.write("one\ntwo\n")
+        commit = ["-c", "user.name=tester", "-c", "user.email=tester@example.com", "commit", "-qm", "initial"]
+        for cmd in (["add", "-A"], commit):
+            subprocess.check_call(["git", "-C", repo] + cmd)
+        capsys.readouterr() # clear output
+        main(['-s', '--format=json', repo])
+        total = loads(capsys.readouterr().out)['total']
+    finally:
+        rmtree(repo, True)
+
+    assert (total['loc'], total['files']) == (2 * len(names), len(names))
+
+
 def test_jobs_determinism(capsys):
     """--jobs must not change output"""
     root = path.dirname(path.dirname(__file__))
