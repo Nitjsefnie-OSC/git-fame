@@ -34,10 +34,12 @@ class TqdmStream:
         tqdm_std.write(msg, end='')
 
 
-def check_output(*a, **k):
+def check_output(*a, errors='replace', **k):
+    """`errors='surrogateescape'` keeps bytes that are not UTF-8, so a listed path passed back as an argument
+    names the same file (in a UTF-8 locale, POSIX encodes a `str` argument back the same way)"""
     log.debug(' '.join(a[0][3:]))
     k.setdefault('stdout', subprocess.PIPE)
-    return subprocess.Popen(*a, **k).communicate()[0].decode('utf-8', errors='replace') # nosec B603
+    return subprocess.Popen(*a, **k).communicate()[0].decode('utf-8', errors=errors) # nosec B603
 
 
 def blank_col(rows, i, blanks):

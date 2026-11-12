@@ -246,11 +246,15 @@ def _get_auth_stats(gitdir, branch="HEAD", since=None, include_files=None, exclu
     log.debug("base command:%s", git_cmd)
     # NUL-separated: a newline split plus `.strip()` trims spaces from the first and last names
     # and keeps the C-quoting Git applies to names holding a quote, a backslash or a control character
-    file_list = [f for f in check_output(git_cmd + ["ls-files", "-z", "--with-tree", branch]).split('\0') if f]
+    # `surrogateescape`: a name that is not UTF-8 goes back to `git blame` as its own bytes rather
+    # than one holding U+FFFD
+    listed = check_output(git_cmd + ["ls-files", "-z", "--with-tree", branch], errors='surrogateescape')
+    file_list = [f for f in listed.split('\0') if f]
     tree_prefix = f"{branch}:"
     text_file_list = {
         f[len(tree_prefix):] if f.startswith(tree_prefix) else f
-        for f in check_output(git_cmd + ["grep", "-I", "--name-only", "-z", ".", branch]).split('\0') if f}
+        for f in check_output(git_cmd + ["grep", "-I", "--name-only", "-z", ".", branch],
+                              errors='surrogateescape').split('\0') if f}
     if not hasattr(include_files, 'search'):
         file_list = [i for i in file_list if (not include_files or (i in include_files)) if i not in exclude_files]
     else:
